@@ -1,0 +1,67 @@
+name: Hot Wheels Drop Poller
+
+on:
+  schedule:
+    # Runs every 30 minutes. GitHub Actions uses UTC — IST is UTC+5:30.
+    # Tip: verify your cron at https://crontab.guru
+    - cron: "*/30 * * * *"
+
+  # Lets you trigger a manual run from the GitHub Actions tab anytime.
+  workflow_dispatch:
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+
+    # Give the job permission to push the updated cache file back to the repo.
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so git push works cleanly.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Hot Wheels agent
+        env:
+          TELEGRAM_BOT_TOKEN:       ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:         ${{ secrets.TELEGRAM_CHAT_ID }}
+          # ── Zepto store IDs ──
+          ZEPTO_STORE_KORAMANGALA:  ${{ secrets.ZEPTO_STORE_KORAMANGALA }}
+          ZEPTO_STORE_INDIRANAGAR:  ${{ secrets.ZEPTO_STORE_INDIRANAGAR }}
+          ZEPTO_STORE_WHITEFIELD:   ${{ secrets.ZEPTO_STORE_WHITEFIELD }}
+          ZEPTO_STORE_JPNAGAR:      ${{ secrets.ZEPTO_STORE_JPNAGAR }}
+          ZEPTO_STORE_HEBBAL:       ${{ secrets.ZEPTO_STORE_HEBBAL }}
+          ZEPTO_STORE_ECITY:        ${{ secrets.ZEPTO_STORE_ECITY }}
+          ZEPTO_STORE_MALLESHWARAM: ${{ secrets.ZEPTO_STORE_MALLESHWARAM }}
+          ZEPTO_STORE_HSR:          ${{ secrets.ZEPTO_STORE_HSR }}
+          # ── Swiggy store IDs ──
+          SWIGGY_STORE_KORAMANGALA:  ${{ secrets.SWIGGY_STORE_KORAMANGALA }}
+          SWIGGY_STORE_INDIRANAGAR:  ${{ secrets.SWIGGY_STORE_INDIRANAGAR }}
+          SWIGGY_STORE_WHITEFIELD:   ${{ secrets.SWIGGY_STORE_WHITEFIELD }}
+          SWIGGY_STORE_JPNAGAR:      ${{ secrets.SWIGGY_STORE_JPNAGAR }}
+          SWIGGY_STORE_HEBBAL:       ${{ secrets.SWIGGY_STORE_HEBBAL }}
+          SWIGGY_STORE_ECITY:        ${{ secrets.SWIGGY_STORE_ECITY }}
+          SWIGGY_STORE_MALLESHWARAM: ${{ secrets.SWIGGY_STORE_MALLESHWARAM }}
+          SWIGGY_STORE_HSR:          ${{ secrets.SWIGGY_STORE_HSR }}
+        run: python hotwheels_agent.py
+
+      - name: Commit updated cache
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add known_listings.json
+          # Only commit if the cache actually changed (avoids empty commits).
+          git diff --cached --quiet || git commit -m "chore: update listings cache [skip ci]"
+          git push

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+*.log
+.DS_Store
+# known_listings.json is intentionally tracked — it's the persistent cache
