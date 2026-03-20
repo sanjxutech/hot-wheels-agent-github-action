@@ -259,38 +259,65 @@ def scrape_zepto(loc):
 
 
 def scrape_bigbasket(loc):
+    """
+    Scrapes the Hot Wheels brand page on BigBasket directly.
+    Only runs for Koramangala since BigBasket is city-wide, not per dark store.
+    """
+    import re as _re
+    if loc["name"] != "Koramangala":
+        return []
+
     listings = []
+    page = 1
+
     try:
-        r = SESSION.get(
-            "https://www.bigbasket.com/product/get-products/",
-            headers={
-                "Accept":    "application/json",
-                "x-channel": "web",
-                "Referer":   "https://www.bigbasket.com/",
-                "Origin":    "https://www.bigbasket.com",
-            },
-            params={"q": SEARCH_TERM, "tab": "product"},
-            timeout=15,
-        )
-        r.raise_for_status()
-        for tab in r.json().get("tab_detail", []):
-            for p in tab.get("product_map", []):
-                prod = p.get("product", {})
-                name = prod.get("desc", "")
-                pid  = str(prod.get("id", ""))
-                slug = prod.get("u", "")
-                if "hot wheel" in name.lower() or "hotwheels" in name.lower():
-                    listings.append({
-                        "id":       make_id("BigBasket", pid, loc["name"]),
-                        "platform": "BigBasket",
-                        "location": loc["name"],
-                        "name":     name,
-                        "price":    f"₹{prod.get('sp', '?')}",
-                        "url":      f"https://www.bigbasket.com{slug}" if slug else "",
-                    })
-        log.info(f"  BigBasket [{loc['name']}]: {len(listings)} found")
+        while True:
+            url = f"https://www.bigbasket.com/pb/hot-wheels/?page={page}"
+            r = SESSION.get(
+                url,
+                headers={
+                    "Accept":  "text/html,application/xhtml+xml,*/*;q=0.9",
+                    "Referer": "https://www.bigbasket.com/",
+                },
+                timeout=15,
+            )
+            r.raise_for_status()
+
+            matches = _re.findall(r'/pd/(\d+)/([^/\"]+)/', r.text)
+            if not matches:
+                break
+
+            seen_on_page = set()
+            for pid, slug in matches:
+                if pid in seen_on_page:
+                    continue
+                seen_on_page.add(pid)
+
+                name = slug.replace("-", " ").title()
+                name = _re.sub(r"\s+\d+\s+(Pc|Pcs|Set|Pack).*$", "", name, flags=_re.IGNORECASE).strip()
+
+                price_match = _re.search(
+                    rf"/pd/{pid}/[^\"]+.*?\u20b9(\d+)",
+                    r.text, _re.DOTALL
+                )
+                price = f"₹{price_match.group(1)}" if price_match else "₹?"
+
+                listings.append({
+                    "id":       make_id("BigBasket", pid, loc["name"]),
+                    "platform": "BigBasket",
+                    "location": loc["name"],
+                    "name":     name,
+                    "price":    price,
+                    "url":      f"https://www.bigbasket.com/pd/{pid}/{slug}/",
+                })
+
+            if 'page=' not in r.text or page >= 5:
+                break
+            page += 1
+
+        log.info(f"  BigBasket: {len(listings)} Hot Wheels listings found")
     except Exception as e:
-        log.warning(f"  BigBasket [{loc['name']}] failed: {e}")
+        log.warning(f"  BigBasket failed: {e}")
     return listings
 
 
