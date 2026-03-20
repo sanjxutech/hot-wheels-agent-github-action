@@ -1,10 +1,6 @@
 """
 Hot Wheels Drop Alert Agent — GitHub Actions edition
-Runs once per invocation (no infinite loop). The cache is a JSON file
-committed back to the repo by the workflow so it persists between runs.
-
-Run locally:   python hotwheels_agent.py
-Run on CI:     triggered automatically by .github/workflows/poll.yml
+Runs once per invocation. Cache is committed back to repo after each run.
 """
 
 import json
@@ -78,15 +74,11 @@ LOCATIONS = [
 ]
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-# Store secrets in GitHub repo → Settings → Secrets and variables → Actions.
-# For local runs, export them in your shell or use a .env file.
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 SEARCH_TERM        = os.environ.get("SEARCH_TERM", "hot wheels")
-
-# Cache file — committed back to the repo by the workflow.
-CACHE_FILE = Path("known_listings.json")
+CACHE_FILE         = Path("known_listings.json")
 
 # ─── LOGGING ──────────────────────────────────────────────────────────────────
 
@@ -103,10 +95,8 @@ def load_cache() -> set:
         return set(json.loads(CACHE_FILE.read_text()).get("seen_ids", []))
     return set()
 
-
 def save_cache(seen_ids: set):
     CACHE_FILE.write_text(json.dumps({"seen_ids": sorted(seen_ids)}, indent=2))
-
 
 def make_id(platform: str, product_id: str, location: str) -> str:
     return hashlib.md5(f"{platform}:{product_id}:{location}".encode()).hexdigest()
@@ -115,7 +105,7 @@ def make_id(platform: str, product_id: str, location: str) -> str:
 
 def send_telegram(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        log.warning("Telegram credentials not set — skipping send.")
+        log.warning("Telegram credentials not set — skipping.")
         return
     try:
         r = requests.post(
@@ -133,8 +123,7 @@ def send_telegram(message: str):
     except Exception as e:
         log.error(f"Telegram send failed: {e}")
 
-
-def format_alert(platform: str, name: str, price: str, location: str, url: str = "") -> str:
+def format_alert(platform, name, price, location, url=""):
     ts = datetime.now().strftime("%d %b %Y, %I:%M %p")
     lines = [
         "🚗 <b>New Hot Wheels Drop!</b>",
@@ -153,26 +142,40 @@ def format_alert(platform: str, name: str, price: str, location: str, url: str =
 SESSION = requests.Session()
 SESSION.headers.update({
     "User-Agent": (
-        "Mozilla/5.0 (Linux; Android 13; Pixel 7) "
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Mobile Safari/537.36"
-    )
+        "Chrome/131.0.0.0 Mobile Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-IN,en;q=0.9,hi;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "sec-ch-ua-mobile": "?1",
+    "sec-ch-ua-platform": '"Android"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
 })
 
 # ─── SCRAPERS ─────────────────────────────────────────────────────────────────
 
-def scrape_blinkit(loc: dict) -> list[dict]:
+def scrape_blinkit(loc):
     listings = []
     try:
+        SESSION.get("https://blinkit.com/", timeout=15)
+        time.sleep(1)
         r = SESSION.get(
             "https://blinkit.com/v6/search/products",
             headers={
-                "app_client": "consumer",
-                "app_version": "1000000",
-                "lat": str(loc["lat"]),
-                "lon": str(loc["lng"]),
-                "device_id": "hotwheels-agent",
+                "app_client":      "consumer",
+                "app_version":     "1000000",
+                "lat":             str(loc["lat"]),
+                "lon":             str(loc["lng"]),
+                "device_id":       "hotwheels-agent",
                 "web_app_version": "1000000",
+                "Referer":         "https://blinkit.com/",
+                "Origin":          "https://blinkit.com",
             },
             params={"search_type": "AutoComplete", "query": SEARCH_TERM},
             timeout=15,
@@ -196,26 +199,45 @@ def scrape_blinkit(loc: dict) -> list[dict]:
     return listings
 
 
-def scrape_zepto(loc: dict) -> list[dict]:
+def scrape_zepto(loc):
     listings = []
     store_id = loc.get("zepto_store_id", "")
     if not store_id:
         log.info(f"  Zepto [{loc['name']}]: no store_id configured, skipping")
         return listings
     try:
-        r = SESSION.post(
+        endpoints = [
             "https://api.zepto.co.in/search/query",
-            json={
-                "query": SEARCH_TERM,
-                "pageNumber": 0,
-                "mode": "AUTOSUGGEST",
-                "storeId": store_id,
-                "latitude": loc["lat"],
-                "longitude": loc["lng"],
-            },
-            timeout=15,
-        )
-        r.raise_for_status()
+            "https://api.zeptonow.com/api/v3/search",
+        ]
+        r = None
+        for endpoint in endpoints:
+            try:
+                r = SESSION.post(
+                    endpoint,
+                    json={
+                        "query":      SEARCH_TERM,
+                        "pageNumber": 0,
+                        "mode":       "AUTOSUGGEST",
+                        "storeId":    store_id,
+                        "latitude":   loc["lat"],
+                        "longitude":  loc["lng"],
+                    },
+                    headers={
+                        "Referer": "https://www.zepto.com/",
+                        "Origin":  "https://www.zepto.com",
+                    },
+                    timeout=15,
+                )
+                if r.status_code == 200:
+                    break
+            except Exception:
+                continue
+
+        if not r or r.status_code != 200:
+            log.warning(f"  Zepto [{loc['name']}]: all endpoints failed")
+            return listings
+
         for section in r.json().get("data", {}).get("sections", []):
             for p in section.get("layout", []):
                 pr   = p.get("productResponse", {})
@@ -236,12 +258,17 @@ def scrape_zepto(loc: dict) -> list[dict]:
     return listings
 
 
-def scrape_bigbasket(loc: dict) -> list[dict]:
+def scrape_bigbasket(loc):
     listings = []
     try:
         r = SESSION.get(
             "https://www.bigbasket.com/product/get-products/",
-            headers={"Accept": "application/json", "x-channel": "web"},
+            headers={
+                "Accept":    "application/json",
+                "x-channel": "web",
+                "Referer":   "https://www.bigbasket.com/",
+                "Origin":    "https://www.bigbasket.com",
+            },
             params={"q": SEARCH_TERM, "tab": "product"},
             timeout=15,
         )
@@ -267,18 +294,27 @@ def scrape_bigbasket(loc: dict) -> list[dict]:
     return listings
 
 
-def scrape_swiggy(loc: dict) -> list[dict]:
+def scrape_swiggy(loc):
     listings = []
     store_id = loc.get("swiggy_store_id", "")
     if not store_id:
         log.info(f"  Swiggy [{loc['name']}]: no store_id configured, skipping")
         return listings
     try:
+        SESSION.get("https://www.swiggy.com/instamart", timeout=15)
+        time.sleep(1)
         r = SESSION.get(
             "https://www.swiggy.com/api/instamart/search",
-            headers={"Content-Type": "application/json"},
-            params={"query": SEARCH_TERM, "storeId": store_id,
-                    "lat": loc["lat"], "lng": loc["lng"]},
+            headers={
+                "Referer": "https://www.swiggy.com/instamart",
+                "Origin":  "https://www.swiggy.com",
+            },
+            params={
+                "query":   SEARCH_TERM,
+                "storeId": store_id,
+                "lat":     loc["lat"],
+                "lng":     loc["lng"],
+            },
             timeout=15,
         )
         r.raise_for_status()
@@ -329,6 +365,11 @@ def main():
                     time.sleep(1)
 
     save_cache(seen)
+
+    # Daily heartbeat at 9am so you know the agent is alive
+    if new_count == 0 and datetime.now().hour == 9 and datetime.now().minute < 30:
+        send_telegram("🤖 Hot Wheels agent is running fine — no new drops yet today.")
+
     log.info(f"══════ Done — {new_count} new listing(s) alerted ══════")
 
 
